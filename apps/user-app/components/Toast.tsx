@@ -22,7 +22,7 @@ interface ToastContextType {
 }
 
 const ToastContext = createContext<ToastContextType>({
-  showToast: (_message, _type) => {},
+  showToast: (_message, _type) => {}, // eslint-disable-line no-unused-vars
 }); // eslint-disable-line no-unused-vars
 
 export function useToast() {
@@ -61,7 +61,7 @@ function ToastItem({
   onRemove,
 }: {
   toast: Toast;
-  onRemove: (id: number) => void;
+  onRemove: (_id: number) => void; // eslint-disable-line no-unused-vars
 }) {
   // eslint-disable-line no-unused-vars
   useEffect(() => {

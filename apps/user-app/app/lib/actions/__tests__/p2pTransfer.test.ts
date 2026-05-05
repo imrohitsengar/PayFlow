@@ -40,6 +40,7 @@ function mockNoSession() {
 /** Simulate a successful $transaction with an interactive tx object */
 function mockSuccessfulTransaction(senderAmount: number, _recipientId: number) {
   // eslint-disable-line no-unused-vars
+  // eslint-disable-line no-unused-vars
   vi.mocked(db.$transaction).mockImplementation(async (cb: any) => {
     const mockTx = {
       $queryRaw: vi.fn().mockResolvedValue([]),
@@ -107,8 +108,6 @@ describe("p2pTransfer", () => {
       name: "Alice",
       password: "hashed",
       email: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
     });
 
     const result = await p2pTransfer("9876543210", 1000);
@@ -125,8 +124,6 @@ describe("p2pTransfer", () => {
       name: "Bob",
       password: "hashed",
       email: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
     });
     vi.mocked(db.$transaction).mockImplementation(async (cb: any) => {
       const mockTx = {
@@ -153,8 +150,6 @@ describe("p2pTransfer", () => {
       name: "Bob",
       password: "hashed",
       email: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
     });
     vi.mocked(db.$transaction).mockImplementation(async (cb: any) => {
       const mockTx = {
@@ -182,8 +177,6 @@ describe("p2pTransfer", () => {
       name: "Bob",
       password: "hashed",
       email: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
     });
     mockSuccessfulTransaction(50000, 2); // sender has 50000 paisa = ₹500
 
@@ -200,8 +193,6 @@ describe("p2pTransfer", () => {
       name: "Bob",
       password: "hashed",
       email: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
     });
     vi.mocked(db.$transaction).mockRejectedValue(
       new Error("DB connection lost"),
