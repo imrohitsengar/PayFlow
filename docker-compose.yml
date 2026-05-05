@@ -1,0 +1,60 @@
+version: "3.9"
+
+services:
+  # ── PostgreSQL ────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: paytm_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: paytm
+      POSTGRES_PASSWORD: paytm_secret
+      POSTGRES_DB: paytm
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paytm -d paytm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── User App (Next.js, port 3001) ─────────────────────────────────────────
+  user-app:
+    build:
+      context: .
+      dockerfile: apps/user-app/Dockerfile
+    container_name: paytm_user_app
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      DATABASE_URL: postgresql://paytm:paytm_secret@postgres:5432/paytm
+      JWT_SECRET: ${JWT_SECRET}
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3001}
+      NODE_ENV: production
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── Bank Webhook (Express, port 3003) ────────────────────────────────────
+  bank-webhook:
+    build:
+      context: .
+      dockerfile: apps/bank-webhook/Dockerfile
+    container_name: paytm_bank_webhook
+    restart: unless-stopped
+    ports:
+      - "3003:3003"
+    environment:
+      DATABASE_URL: postgresql://paytm:paytm_secret@postgres:5432/paytm
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET}
+      PORT: 3003
+      NODE_ENV: production
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
