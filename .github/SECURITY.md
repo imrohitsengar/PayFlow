@@ -14,7 +14,7 @@ We take the security of this project seriously. If you believe you have found a 
 
 Instead, please report it via one of the following methods:
 
-1. **Email**: [your-email@example.com](mailto:your-email@example.com)
+1. **Email**: [rsengar257@gmail.com]
 2. **GitHub Private Reporting**: Use the "Report a vulnerability" button on the Security tab of this repository.
 
 Please provide a detailed summary of the vulnerability, including:
