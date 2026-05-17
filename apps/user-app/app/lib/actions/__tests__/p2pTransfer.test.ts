@@ -38,9 +38,8 @@ function mockNoSession() {
 }
 
 /** Simulate a successful $transaction with an interactive tx object */
+// eslint-disable-next-line no-unused-vars
 function mockSuccessfulTransaction(senderAmount: number, _recipientId: number) {
-  // eslint-disable-line no-unused-vars
-  // eslint-disable-line no-unused-vars
   vi.mocked(db.$transaction).mockImplementation(async (cb: any) => {
     const mockTx = {
       $queryRaw: vi.fn().mockResolvedValue([]),
