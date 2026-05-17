@@ -1,134 +1,169 @@
 import express, { Request, Response, NextFunction } from "express";
 import crypto from "crypto";
 import db from "@repo/db/client";
-import { z } from "zod";
 import rateLimit from "express-rate-limit";
 
 const app = express();
 
 // Extend Request type to include rawBody
 interface WebhookRequest extends Request {
-    rawBody?: string;
+  rawBody?: string;
 }
 
 // We need the raw body for HMAC verification, so we use a custom middleware
-app.use(express.json({
+app.use(
+  express.json({
     verify: (req: WebhookRequest, _res, buf) => {
-        req.rawBody = buf.toString();
-    }
-}));
+      req.rawBody = buf.toString();
+    },
+  }),
+);
 
 // Rate limiter: max 60 webhook calls per minute per IP
 const webhookLimiter = rateLimit({
-    windowMs: 60 * 1000,
-    max: 60,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { message: "Too many requests, please try again later" },
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Too many requests, please try again later" },
 });
 
-// Zod schema for webhook payload validation
-const webhookPayloadSchema = z.object({
-    token: z.string().min(1, "Token is required"),
-    user_identifier: z.string().min(1, "User identifier is required"),
-    amount: z.string().min(1, "Amount is required"),
-});
+// Razorpay webhook signature verification middleware
+function verifyRazorpaySignature(
+  req: WebhookRequest,
+  res: Response,
+  next: NextFunction,
+) {
+  const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
 
-// HMAC signature verification middleware
-function verifyWebhookSignature(req: WebhookRequest, res: Response, next: NextFunction) {
-    const webhookSecret = process.env.WEBHOOK_SECRET;
+  if (!webhookSecret) {
+    console.error("RAZORPAY_WEBHOOK_SECRET environment variable is not set");
+    res.status(500).json({ message: "Webhook secret not configured" });
+    return;
+  }
 
-    if (!webhookSecret) {
-        console.error("WEBHOOK_SECRET environment variable is not set");
-        res.status(500).json({ message: "Webhook secret not configured" });
-        return;
+  const signature = req.headers["x-razorpay-signature"];
+  if (!signature || typeof signature !== "string") {
+    res.status(401).json({ message: "Missing webhook signature" });
+    return;
+  }
+
+  const expectedSignature = crypto
+    .createHmac("sha256", webhookSecret)
+    .update(req.rawBody || "")
+    .digest("hex");
+
+  try {
+    const sigBuffer = Buffer.from(signature, "hex");
+    const expectedBuffer = Buffer.from(expectedSignature, "hex");
+
+    if (
+      sigBuffer.length !== expectedBuffer.length ||
+      !crypto.timingSafeEqual(sigBuffer, expectedBuffer)
+    ) {
+      res.status(401).json({ message: "Invalid webhook signature" });
+      return;
     }
+  } catch (_e) {
+    res.status(401).json({ message: "Invalid webhook signature format" });
+    return;
+  }
 
-    const signature = req.headers["x-webhook-signature"];
-    if (!signature || typeof signature !== "string") {
-        res.status(401).json({ message: "Missing webhook signature" });
-        return;
-    }
-
-    const expectedSignature = crypto
-        .createHmac("sha256", webhookSecret)
-        .update(req.rawBody || "")
-        .digest("hex");
-
-    try {
-        const sigBuffer = Buffer.from(signature, "hex");
-        const expectedBuffer = Buffer.from(expectedSignature, "hex");
-
-        if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
-            res.status(401).json({ message: "Invalid webhook signature" });
-            return;
-        }
-    } catch (_e) {
-        res.status(401).json({ message: "Invalid webhook signature format" });
-        return;
-    }
-
-    next();
+  next();
 }
 
-app.post("/hdfcwebhook", webhookLimiter, verifyWebhookSignature, async (req: WebhookRequest, res: Response) => {
-    const parsed = webhookPayloadSchema.safeParse(req.body);
-    if (!parsed.success) {
-        res.status(400).json({
-            message: "Invalid payload",
-            errors: parsed.error.flatten().fieldErrors
-        });
-        return;
+// Health check endpoint
+app.get("/health", (_req: Request, res: Response) => {
+  res.json({ status: "ok" });
+});
+
+// Razorpay webhook endpoint — handles payment.captured and payment.failed events
+app.post(
+  "/razorpay-webhook",
+  webhookLimiter,
+  verifyRazorpaySignature,
+  async (req: WebhookRequest, res: Response) => {
+    const event = req.body?.event;
+    const payment = req.body?.payload?.payment?.entity;
+
+    if (!event || !payment) {
+      res.status(400).json({ message: "Invalid webhook payload" });
+      return;
     }
 
-    const paymentInformation = {
-        token: parsed.data.token,
-        userId: parsed.data.user_identifier,
-        amount: parsed.data.amount
-    };
+    const orderId = payment.order_id;
+    const paymentId = payment.id;
+
+    if (!orderId) {
+      res.status(400).json({ message: "Missing order_id in payment entity" });
+      return;
+    }
 
     try {
-        // Idempotency check
-        const existingTransaction = await db.onRampTransaction.findUnique({
-            where: { token: paymentInformation.token }
-        });
+      // Look up the transaction by Razorpay order_id (stored as token)
+      const transaction = await db.onRampTransaction.findUnique({
+        where: { token: orderId },
+      });
 
-        if (!existingTransaction) {
-            res.status(404).json({ message: "Transaction not found" });
-            return;
-        }
+      if (!transaction) {
+        // Unknown order — might be for a different system
+        res.status(200).json({ message: "Order not found, skipping" });
+        return;
+      }
 
-        // Idempotent re-delivery
-        if (existingTransaction.status === "Success") {
-            res.json({ message: "Already processed" });
-            return;
+      if (event === "payment.captured") {
+        // Idempotency: skip if already processed
+        if (transaction.status === "Success") {
+          res.json({ message: "Already processed" });
+          return;
         }
 
         // Only process transactions in Processing state
-        if (existingTransaction.status !== "Processing") {
-            res.status(400).json({
-                message: `Transaction is in ${existingTransaction.status} state, cannot process`
-            });
-            return;
+        if (transaction.status !== "Processing") {
+          res.status(200).json({
+            message: `Transaction in ${transaction.status} state, skipping`,
+          });
+          return;
         }
 
-        // Process atomically
+        // Atomically: credit balance + mark as Success
         await db.$transaction([
-            db.balance.updateMany({
-                where: { userId: Number(paymentInformation.userId) },
-                data: { amount: { increment: Number(paymentInformation.amount) } }
-            }),
-            db.onRampTransaction.updateMany({
-                where: { token: paymentInformation.token },
-                data: { status: "Success" }
-            })
+          db.balance.updateMany({
+            where: { userId: transaction.userId },
+            data: { amount: { increment: transaction.amount } },
+          }),
+          db.onRampTransaction.updateMany({
+            where: { token: orderId, status: "Processing" },
+            data: {
+              status: "Success",
+              razorpayPaymentId: paymentId,
+            },
+          }),
         ]);
 
-        res.json({ message: "Captured" });
+        res.json({ message: "Payment captured successfully" });
+      } else if (event === "payment.failed") {
+        // Mark as Failure if still Processing
+        if (transaction.status === "Processing") {
+          await db.onRampTransaction.updateMany({
+            where: { token: orderId, status: "Processing" },
+            data: {
+              status: "Failure",
+              razorpayPaymentId: paymentId,
+            },
+          });
+        }
+
+        res.json({ message: "Payment failure recorded" });
+      } else {
+        // Other events (e.g., refund) — acknowledge but don't process
+        res.json({ message: `Event ${event} acknowledged` });
+      }
     } catch (e) {
-        console.error(e);
-        res.status(500).json({ message: "Error while processing webhook" });
+      console.error("Razorpay webhook error:", e);
+      res.status(500).json({ message: "Error processing webhook" });
     }
-});
+  },
+);
 
 export default app;

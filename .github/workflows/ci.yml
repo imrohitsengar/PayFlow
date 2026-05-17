@@ -54,6 +54,8 @@ jobs:
           JWT_SECRET: "ci-test-jwt-secret-at-least-32-chars!!"
           NEXTAUTH_URL: "http://localhost:3001"
           DATABASE_URL: "postgresql://test:test@localhost:5432/paytm_test"
+          RAZORPAY_KEY_ID: "rzp_test_ci_placeholder"
+          RAZORPAY_KEY_SECRET: "ci_razorpay_secret_placeholder"
 
       - name: Type-check bank-webhook
         run: cd apps/bank-webhook && npx tsc --noEmit
@@ -98,13 +100,15 @@ jobs:
       - name: Run bank-webhook tests
         run: npm run test --workspace=apps/bank-webhook
         env:
-          WEBHOOK_SECRET: "ci-webhook-secret-at-least-32-chars!!"
+          RAZORPAY_WEBHOOK_SECRET: "ci-razorpay-webhook-secret-at-least-32-chars!!"
 
       - name: Run user-app tests
         run: npm run test --workspace=apps/user-app
         env:
           JWT_SECRET: "ci-test-jwt-secret-at-least-32-chars!!"
           NEXTAUTH_URL: "http://localhost:3001"
+          RAZORPAY_KEY_ID: "rzp_test_ci_placeholder"
+          RAZORPAY_KEY_SECRET: "ci_razorpay_secret_placeholder"
 
       - name: Upload coverage reports
         uses: actions/upload-artifact@v4
@@ -146,5 +150,8 @@ jobs:
           NEXTAUTH_SECRET: "ci-build-nextauth-secret-32-chars!!"
           GOOGLE_CLIENT_ID: "ci-placeholder"
           GOOGLE_CLIENT_SECRET: "ci-placeholder"
-          WEBHOOK_SECRET: "ci-webhook-secret-at-least-32-chars!!"
+          RAZORPAY_WEBHOOK_SECRET: "ci-razorpay-webhook-secret-at-least-32-chars!!"
+          RAZORPAY_KEY_ID: "rzp_test_ci_placeholder"
+          RAZORPAY_KEY_SECRET: "ci_razorpay_secret_placeholder"
+          NEXT_PUBLIC_RAZORPAY_KEY_ID: "rzp_test_ci_placeholder"
           NEXT_PUBLIC_SKIP_BUILD_STATIC_GENERATION: "true"

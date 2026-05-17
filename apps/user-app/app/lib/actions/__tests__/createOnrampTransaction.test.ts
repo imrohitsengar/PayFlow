@@ -9,16 +9,32 @@ vi.mock("next-auth", () => ({
 vi.mock("@repo/db/client", () => ({
   default: {
     onRampTransaction: { create: vi.fn() },
+    balance: { updateMany: vi.fn() },
+    $transaction: vi.fn(),
   },
+}));
+
+vi.mock("razorpay", () => ({
+  default: vi.fn().mockImplementation(() => ({
+    orders: {
+      create: vi.fn().mockResolvedValue({
+        id: "order_test_123",
+        amount: 50000,
+        currency: "INR",
+        receipt: "payflow_test",
+      }),
+    },
+  })),
 }));
 
 process.env.JWT_SECRET ??= "test-jwt-secret-at-least-32-chars-long!!";
 process.env.NEXTAUTH_URL ??= "http://localhost:3001";
 process.env.DATABASE_URL ??= "postgresql://test:test@localhost:5432/test";
+process.env.RAZORPAY_KEY_ID ??= "rzp_test_key";
+process.env.RAZORPAY_KEY_SECRET ??= "rzp_test_secret";
 
 const { getServerSession } = await import("next-auth");
 const { default: db } = await import("@repo/db/client");
-const { createOnRampTransaction } = await import("../createOnrampTransaction");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -31,98 +47,114 @@ function mockSession(userId = "7") {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-describe("createOnRampTransaction", () => {
+describe("Razorpay create-order API", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  // ── Authentication ────────────────────────────────────────────────────────
-
-  it("returns error when user is not authenticated", async () => {
+  it("requires authentication", async () => {
     vi.mocked(getServerSession).mockResolvedValue(null);
-    const result = await createOnRampTransaction("HDFC Bank", 500);
-    expect(result.message).toBe("Unauthenticated request");
+    // Import the route handler
+    const { POST } =
+      await import("../../../../app/api/razorpay/create-order/route");
+
+    const req = new Request("http://localhost:3001/api/razorpay/create-order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ amount: 500 }),
+    });
+
+    const res = await POST(req as any);
+    expect(res.status).toBe(401);
+    const data = await res.json();
+    expect(data.message).toBe("Unauthenticated request");
   });
 
-  it("returns error when session exists but user.id is missing", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({
-      user: { id: undefined, name: "Ghost" },
-      expires: new Date(Date.now() + 86400000).toISOString(),
-    } as any);
-    const result = await createOnRampTransaction("HDFC Bank", 500);
-    expect(result.message).toBe("Unauthenticated request");
+  it("rejects invalid amount (zero)", async () => {
+    mockSession("7");
+    const { POST } =
+      await import("../../../../app/api/razorpay/create-order/route");
+
+    const req = new Request("http://localhost:3001/api/razorpay/create-order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ amount: 0 }),
+    });
+
+    const res = await POST(req as any);
+    expect(res.status).toBe(400);
   });
 
-  // ── Zod validation ────────────────────────────────────────────────────────
+  it("rejects negative amount", async () => {
+    mockSession("7");
+    const { POST } =
+      await import("../../../../app/api/razorpay/create-order/route");
 
-  it("returns error for zero amount", async () => {
-    mockSession();
-    const result = await createOnRampTransaction("HDFC Bank", 0);
-    expect(result.message).toMatch(/greater than zero/i);
+    const req = new Request("http://localhost:3001/api/razorpay/create-order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ amount: -100 }),
+    });
+
+    const res = await POST(req as any);
+    expect(res.status).toBe(400);
   });
 
-  it("returns error for negative amount", async () => {
-    mockSession();
-    const result = await createOnRampTransaction("HDFC Bank", -100);
-    expect(result.message).toMatch(/greater than zero/i);
-  });
-
-  it("returns error for empty provider", async () => {
-    mockSession();
-    const result = await createOnRampTransaction("", 500);
-    expect(result.message).toMatch(/provider/i);
-  });
-
-  // ── Successful creation ───────────────────────────────────────────────────
-
-  it("creates onramp transaction and returns 'Done'", async () => {
+  it("creates order and transaction on valid request", async () => {
     mockSession("7");
     vi.mocked(db.onRampTransaction.create).mockResolvedValue({} as any);
+    const { POST } =
+      await import("../../../../app/api/razorpay/create-order/route");
 
-    const result = await createOnRampTransaction("HDFC Bank", 500);
-    expect(result.message).toBe("Done");
+    const req = new Request("http://localhost:3001/api/razorpay/create-order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ amount: 500 }),
+    });
+
+    const res = await POST(req as any);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.orderId).toBe("order_test_123");
+    expect(data.amount).toBe(50000);
+    expect(data.currency).toBe("INR");
     expect(db.onRampTransaction.create).toHaveBeenCalledOnce();
   });
 
   it("stores amount as paisa (input × 100)", async () => {
     mockSession("7");
     vi.mocked(db.onRampTransaction.create).mockResolvedValue({} as any);
+    const { POST } =
+      await import("../../../../app/api/razorpay/create-order/route");
 
-    await createOnRampTransaction("Axis Bank", 250);
+    const req = new Request("http://localhost:3001/api/razorpay/create-order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ amount: 250 }),
+    });
+
+    await POST(req as any);
 
     const callArg = vi.mocked(db.onRampTransaction.create).mock.calls[0]![0];
     expect(callArg.data.amount).toBe(25000); // 250 × 100
   });
 
-  it("stores the transaction with Processing status", async () => {
+  it("stores transaction with Processing status", async () => {
     mockSession("7");
     vi.mocked(db.onRampTransaction.create).mockResolvedValue({} as any);
+    const { POST } =
+      await import("../../../../app/api/razorpay/create-order/route");
 
-    await createOnRampTransaction("HDFC Bank", 100);
+    const req = new Request("http://localhost:3001/api/razorpay/create-order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ amount: 100 }),
+    });
+
+    await POST(req as any);
 
     const callArg = vi.mocked(db.onRampTransaction.create).mock.calls[0]![0];
     expect(callArg.data.status).toBe("Processing");
-  });
-
-  it("generates a UUID token (crypto.randomUUID format)", async () => {
-    mockSession("7");
-    vi.mocked(db.onRampTransaction.create).mockResolvedValue({} as any);
-
-    await createOnRampTransaction("HDFC Bank", 100);
-
-    const callArg = vi.mocked(db.onRampTransaction.create).mock.calls[0]![0];
-    const uuidRegex =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    expect(callArg.data.token).toMatch(uuidRegex);
-  });
-
-  it("associates transaction with the correct userId from session", async () => {
-    mockSession("42");
-    vi.mocked(db.onRampTransaction.create).mockResolvedValue({} as any);
-
-    await createOnRampTransaction("HDFC Bank", 100);
-
-    const callArg = vi.mocked(db.onRampTransaction.create).mock.calls[0]![0];
-    expect(callArg.data.userId).toBe(42);
+    expect(callArg.data.provider).toBe("Razorpay");
   });
 });
